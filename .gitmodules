@@ -7,3 +7,12 @@
 [submodule "zlib"]
 	path = zlib
 	url = https://github.com/madler/zlib.git
+[submodule "argp-standalone"]
+	path = argp-standalone
+	url = https://github.com/argp-standalone/argp-standalone.git
+[submodule "musl-fts"]
+	path = musl-fts
+	url = https://github.com/void-linux/musl-fts.git
+[submodule "musl-obstack"]
+	path = musl-obstack
+	url = https://github.com/void-linux/musl-/void-linux/musl-obstack.git
