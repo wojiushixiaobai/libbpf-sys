@@ -42,20 +42,32 @@ default = ["vendored-libbpf"]
 # Set default-features = false instead.
 novendor = []
 # Meta-feature to use vendored versions of all dependencies.
-vendored = ["vendored-libbpf", "vendored-libelf", "vendored-zlib"]
+vendored = ["vendored-libargp", "vendored-libbpf", "vendored-libelf", "vendored-libfts", "vendored-libobstack", "vendored-zlib"]
+# Use vendored `libargp`. Implies linking it statically.
+vendored-libargp = ["static-libargp"]
 # Use vendored `libbpf`. Implies linking it statically.
 vendored-libbpf = ["static-libbpf"]
 # Use vendored `libelf`. Implies linking it statically.
 vendored-libelf = ["static-libelf"]
+# Use vendored `libfts`. Implies linking it statically.
+vendored-libfts = ["static-libfts"]
+# Use vendored `libobstack`. Implies linking it statically.
+vendored-libobstack = ["static-libobstack"]
 # Use vendored `zlib`. Implies linking it statically.
 vendored-zlib = ["static-zlib"]
 # Meta-feature to link against all dependencies statically.
-static = ["static-libbpf", "static-libelf", "static-zlib"]
+static = ["static-libargp", "static-libbpf", "static-libelf", "static-libfts", "static-libobstack", "static-zlib"]
+# Link libargp statically.
+static-libargp = ["static-libbpf"]
 # Link libbpf statically.
 static-libbpf = []
 # Link libelf statically. Implies linking libbpf statically, because libbpf is
 # the libelf consumer.
 static-libelf = ["static-libbpf"]
+# Link libfts statically.
+static-libfts = ["static-libbpf"]
+# Link libobstack statically.
+static-libobstack = ["static-libbpf"]
 # Link zlib statically. Implies linking libbpf statically, because libbpf is
 # the zlib consumer.
 static-zlib = ["static-libbpf"]

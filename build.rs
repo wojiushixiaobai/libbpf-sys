@@ -116,18 +116,30 @@ fn main() {
 
     generate_bindings(src_dir.clone());
 
+    let vendored_libargp = cfg!(feature = "vendored-libargp");
     let vendored_libbpf = cfg!(feature = "vendored-libbpf");
     let vendored_libelf = cfg!(feature = "vendored-libelf");
+    let vendored_libfts = cfg!(feature = "vendored-libfts");
+    let vendored_libobstack = cfg!(feature = "vendored-libobstack");
     let vendored_zlib = cfg!(feature = "vendored-zlib");
+    println!("Using feature vendored-libargp={}", vendored_libargp);
     println!("Using feature vendored-libbpf={}", vendored_libbpf);
     println!("Using feature vendored-libelf={}", vendored_libelf);
+    println!("Using feature vendored-libfts={}", vendored_libfts);
+    println!("Using feature vendored-libobstack={}", vendored_libobstack);
     println!("Using feature vendored-zlib={}", vendored_zlib);
 
+    let static_libargp = cfg!(feature = "static-libargp");
     let static_libbpf = cfg!(feature = "static-libbpf");
     let static_libelf = cfg!(feature = "static-libelf");
+    let static_libfts = cfg!(feature = "static-libfts");
+    let static_libobstack = cfg!(feature = "static-libobstack");
     let static_zlib = cfg!(feature = "static-zlib");
+    println!("Using feature static-libargp={}", static_libargp);
     println!("Using feature static-libbpf={}", static_libbpf);
     println!("Using feature static-libelf={}", static_libelf);
+    println!("Using feature static-libfts={}", static_libfts);
+    println!("Using feature static-libobstack={}", static_libobstack);
     println!("Using feature static-zlib={}", static_zlib);
 
     if cfg!(feature = "novendor") {
@@ -150,7 +162,7 @@ fn main() {
         pkg_check("gawk");
     }
 
-    let (compiler, mut cflags) = if vendored_libbpf || vendored_libelf || vendored_zlib {
+    let (compiler, mut cflags) = if vendored_libargp || vendored_libbpf || vendored_libelf || vendored_libfts || vendored_libobstack || vendored_zlib {
         pkg_check("make");
         pkg_check("pkg-config");
 
@@ -167,6 +179,21 @@ fn main() {
     } else {
         (None, ffi::OsString::new())
     };
+
+    if vendored_libargp {
+        make_libargp(compiler.as_ref().unwrap(), &src_dir, &out_dir);
+        cflags.push(format!(" -I{}/argp-standalone/", src_dir.display()));
+    }
+
+    if vendored_libfts {
+        make_fts(compiler.as_ref().unwrap(), &src_dir, &out_dir);
+        cflags.push(format!(" -I{}/musl-fts/", src_dir.display()));
+    }
+
+    if vendored_libobstack {
+        make_obstack(compiler.as_ref().unwrap(), &src_dir, &out_dir);
+        cflags.push(format!(" -I{}/musl-obstack/", src_dir.display()));
+    }
 
     if vendored_zlib {
         make_zlib(compiler.as_ref().unwrap(), &src_dir, &out_dir);
@@ -185,6 +212,18 @@ fn main() {
     println!(
         "cargo:rustc-link-search=native={}",
         out_dir.to_string_lossy()
+    );
+    println!(
+        "cargo:rustc-link-lib={}argp",
+        if static_libargp { "static=" } else { "" }
+    );
+    println!(
+        "cargo:rustc-link-lib={}fts",
+        if static_libargp { "static=" } else { "" }
+    );
+    println!(
+        "cargo:rustc-link-lib={}obstack",
+        if static_libargp { "static=" } else { "" }
     );
     println!(
         "cargo:rustc-link-lib={}elf",
@@ -227,6 +266,232 @@ fn open_lockable(path: &Path) -> io::Result<File> {
         },
         e @ Err(..) => e,
     }
+}
+
+fn make_libargp(compiler: &cc::Tool, src_dir: &path::Path, out_dir: &path::Path) {
+    let src_dir = src_dir.join("argp-standalone");
+    // lock README such that if two crates are trying to compile
+    // this at the same time (eg libbpf-rs libbpf-cargo)
+    // they wont trample each other
+    let file = open_lockable(&src_dir.join("README.md")).unwrap();
+    let _lock = fcntl::Flock::lock(file, fcntl::FlockArg::LockExclusive).unwrap();
+
+    let status = process::Command::new("autoreconf")
+        .arg("--install")
+        .arg("--force")
+        .current_dir(&src_dir)
+        .status()
+        .expect("could not execute make");
+
+    assert!(status.success(), "make failed");
+
+    let status = process::Command::new("./configure")
+        .arg("--prefix")
+        .arg(&src_dir)
+        .arg("--host")
+        .arg({
+            let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
+            let arch = match arch.as_str() {
+                "riscv64gc" => "riscv64",
+                "riscv32gc" => "riscv32",
+                other => other,
+            };
+            let vendor = env::var("CARGO_CFG_TARGET_VENDOR").unwrap();
+            let env = env::var("CARGO_CFG_TARGET_ENV").unwrap();
+            let os = env::var("CARGO_CFG_TARGET_OS").unwrap();
+            format!("{arch}-{vendor}-{os}-{env}")
+        })
+        .arg("--libdir")
+        .arg(out_dir)
+        .env("CC", compiler.path())
+        .env("CFLAGS", compiler.cflags_env())
+        .current_dir(&src_dir)
+        .status()
+        .expect("could not execute make");
+
+    assert!(status.success(), "make failed");
+
+    let status = process::Command::new("make")
+        .arg("-j")
+        .arg(format!("{}", num_cpus()))
+        .current_dir(&src_dir)
+        .status()
+        .expect("could not execute make");
+
+    assert!(status.success(), "make failed");
+
+    let status = process::Command::new("make")
+        .arg("install")
+        .arg("-j")
+        .arg(format!("{}", num_cpus()))
+        .current_dir(&src_dir)
+        .status()
+        .expect("could not execute make");
+
+    assert!(status.success(), "make failed");
+
+    fs::copy(
+        &src_dir.join("argp.h"),
+        &out_dir.join("argp.h"),
+    )
+    .expect("Failed to copy argp.h");
+
+    fs::copy(
+        &src_dir.join("libargp.a"),
+        &out_dir.join("libargp.a"),
+    )
+    .expect("Failed to copy libargp.a");
+
+    let status = process::Command::new("make")
+        .arg("distclean")
+        .current_dir(&src_dir)
+        .status()
+        .expect("could not execute make");
+
+    assert!(status.success(), "make failed");
+    emit_rerun_directives_for_contents(&src_dir);
+}
+
+fn make_fts(compiler: &cc::Tool, src_dir: &path::Path, out_dir: &path::Path) {
+    let src_dir = src_dir.join("musl-fts");
+    // lock README such that if two crates are trying to compile
+    // this at the same time (eg libbpf-rs libbpf-cargo)
+    // they wont trample each other
+    let file = open_lockable(&src_dir.join("README")).unwrap();
+    let _lock = fcntl::Flock::lock(file, fcntl::FlockArg::LockExclusive).unwrap();
+
+    let status = process::Command::new("./bootstrap.sh")
+        .current_dir(&src_dir)
+        .status()
+        .expect("could not execute make");
+    
+    assert!(status.success(), "make failed");
+
+    let status = process::Command::new("./configure")
+        .arg("--enable-static")
+        .arg("--prefix")
+        .arg(&src_dir)
+        .arg("--host")
+        .arg({
+            let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
+            let arch = match arch.as_str() {
+                "riscv64gc" => "riscv64",
+                "riscv32gc" => "riscv32",
+                other => other,
+            };
+            let vendor = env::var("CARGO_CFG_TARGET_VENDOR").unwrap();
+            let env = env::var("CARGO_CFG_TARGET_ENV").unwrap();
+            let os = env::var("CARGO_CFG_TARGET_OS").unwrap();
+            format!("{arch}-{vendor}-{os}-{env}")
+        })
+        .arg("--libdir")
+        .arg(out_dir)
+        .env("CC", compiler.path())
+        .env("CFLAGS", compiler.cflags_env())
+        .current_dir(&src_dir)
+        .status()
+        .expect("could not execute make");
+
+    assert!(status.success(), "make failed");
+
+    let status = process::Command::new("make")
+        .arg("-j")
+        .arg(format!("{}", num_cpus()))
+        .current_dir(&src_dir)
+        .status()
+        .expect("could not execute make");
+
+    assert!(status.success(), "make failed");
+
+    let status = process::Command::new("make")
+        .arg("install")
+        .arg("-j")
+        .arg(format!("{}", num_cpus()))
+        .current_dir(&src_dir)
+        .status()
+        .expect("could not execute make");
+
+    assert!(status.success(), "make failed");
+
+    let status = process::Command::new("make")
+        .arg("distclean")
+        .current_dir(&src_dir)
+        .status()
+        .expect("could not execute make");
+
+    assert!(status.success(), "make failed");
+    emit_rerun_directives_for_contents(&src_dir);
+}
+
+fn make_obstack(compiler: &cc::Tool, src_dir: &path::Path, out_dir: &path::Path) {
+    let src_dir = src_dir.join("musl-obstack");
+    // lock README such that if two crates are trying to compile
+    // this at the same time (eg libbpf-rs libbpf-cargo)
+    // they wont trample each other
+    let file = open_lockable(&src_dir.join("README")).unwrap();
+    let _lock = fcntl::Flock::lock(file, fcntl::FlockArg::LockExclusive).unwrap();
+
+    let status = process::Command::new("./bootstrap.sh")
+        .current_dir(&src_dir)
+        .status()
+        .expect("could not execute make");
+
+    assert!(status.success(), "make failed");
+
+    let status = process::Command::new("./configure")
+        .arg("--enable-static")
+        .arg("--prefix")
+        .arg(&src_dir)
+        .arg("--host")
+        .arg({
+            let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
+            let arch = match arch.as_str() {
+                "riscv64gc" => "riscv64",
+                "riscv32gc" => "riscv32",
+                other => other,
+            };
+            let vendor = env::var("CARGO_CFG_TARGET_VENDOR").unwrap();
+            let env = env::var("CARGO_CFG_TARGET_ENV").unwrap();
+            let os = env::var("CARGO_CFG_TARGET_OS").unwrap();
+            format!("{arch}-{vendor}-{os}-{env}")
+        })
+        .arg("--libdir")
+        .arg(out_dir)
+        .env("CC", compiler.path())
+        .env("CFLAGS", compiler.cflags_env())
+        .current_dir(&src_dir)
+        .status()
+        .expect("could not execute make");
+
+    assert!(status.success(), "make failed");
+
+    let status = process::Command::new("make")
+        .arg("-j")
+        .arg(format!("{}", num_cpus()))
+        .current_dir(&src_dir)
+        .status()
+        .expect("could not execute make");
+
+    assert!(status.success(), "make failed");
+
+    let status = process::Command::new("make")
+        .arg("install")
+        .arg("-j")
+        .arg(format!("{}", num_cpus()))
+        .current_dir(&src_dir)
+        .status()
+        .expect("could not execute make");
+
+    assert!(status.success(), "make failed");
+
+    let status = process::Command::new("make")
+        .arg("distclean")
+        .current_dir(&src_dir)
+        .status()
+        .expect("could not execute make");
+
+    assert!(status.success(), "make failed");
+    emit_rerun_directives_for_contents(&src_dir);
 }
 
 fn make_zlib(compiler: &cc::Tool, src_dir: &path::Path, out_dir: &path::Path) {
@@ -297,6 +562,7 @@ fn make_elfutils(compiler: &cc::Tool, src_dir: &path::Path, out_dir: &path::Path
     #[cfg(target_arch = "aarch64")]
     cflags.push_str(" -Wno-error=stringop-overflow");
     cflags.push_str(&format!(" -I{}/zlib/", src_dir.display()));
+    cflags.push_str(&format!(" -I{}/argp-standalone/", src_dir.display()));
 
     let status = process::Command::new("autoreconf")
         .arg("--install")
